@@ -1,0 +1,331 @@
+#include <Arduino.h>
+#include <DHT.h>
+
+#define DHTPIN 4
+#define DHTTYPE DHT11
+
+#define MQ2_PIN 34
+#define RAD_PIN 35
+#define BUZZER 5
+
+#define TEMP_THRESHOLD 35
+#define GAS_THRESHOLD 1500
+#define RAD_THRESHOLD 70
+
+DHT dht(DHTPIN,DHTTYPE);
+
+QueueHandle_t eventQueue;
+
+float lastTemp=0;
+int lastGas=0;
+int lastRadiation=0;
+
+String statusText="NORMAL";
+
+typedef struct{
+
+int type;
+int gas;
+int radiation;
+float temp;
+
+}EventData;
+
+
+/******** Radiation Task ********/
+/* Priority=4 */
+
+void radiationTask(void *pv){
+
+EventData data;
+
+while(1){
+
+data.type=1;
+
+/* Read potentiometer */
+int rawADC=
+analogRead(
+RAD_PIN);
+
+/* Convert 0-4095 to 0-100 */
+
+data.radiation=
+map(
+rawADC,
+0,
+4095,
+0,
+100);
+
+lastRadiation=
+data.radiation;
+
+xQueueSend(
+eventQueue,
+&data,
+0);
+
+vTaskDelay(
+pdMS_TO_TICKS(
+100));
+
+}
+
+}
+
+
+/******** MQ2 TASK ********/
+/* Priority=3 */
+
+void mqTask(void *pv){
+
+EventData data;
+
+while(1){
+
+data.type=2;
+
+data.gas=
+analogRead(
+MQ2_PIN);
+
+lastGas=
+data.gas;
+
+xQueueSend(
+eventQueue,
+&data,
+0);
+
+vTaskDelay(
+pdMS_TO_TICKS(
+200));
+
+}
+
+}
+
+
+/******** TEMP TASK ********/
+/* Priority=2 */
+
+void tempTask(void *pv){
+
+EventData data;
+
+while(1){
+
+data.type=3;
+
+data.temp=
+dht.readTemperature();
+
+if(
+!isnan(
+data.temp)){
+
+lastTemp=
+data.temp;
+
+xQueueSend(
+eventQueue,
+&data,
+0);
+
+}
+
+vTaskDelay(
+pdMS_TO_TICKS(
+1000));
+
+}
+
+}
+
+
+/******** ALERT TASK ********/
+/* Priority=1 */
+
+void alertTask(void *pv){
+
+EventData data;
+
+while(1){
+
+if(
+xQueueReceive(
+eventQueue,
+&data,
+portMAX_DELAY)){
+
+if(
+lastRadiation>
+RAD_THRESHOLD){
+
+statusText=
+"RADIATION";
+
+digitalWrite(
+BUZZER,
+HIGH);
+
+}
+
+else if(
+lastGas>
+GAS_THRESHOLD){
+
+statusText=
+"GAS ALERT";
+
+digitalWrite(
+BUZZER,
+HIGH);
+
+}
+
+else if(
+lastTemp>
+TEMP_THRESHOLD){
+
+statusText=
+"TEMP ALERT";
+
+digitalWrite(
+BUZZER,
+HIGH);
+
+}
+
+else{
+
+statusText=
+"NORMAL";
+
+digitalWrite(
+BUZZER,
+LOW);
+
+}
+
+}
+
+}
+
+}
+
+
+/******** DASHBOARD TASK ********/
+/* Lowest priority */
+
+void dashboardTask(void *pv){
+
+while(1){
+
+Serial.print(
+lastRadiation);
+
+Serial.print(",");
+
+Serial.print(
+lastGas);
+
+Serial.print(",");
+
+Serial.print(
+lastTemp);
+
+Serial.print(",");
+
+Serial.println(
+(unsigned long)
+xTaskGetTickCount());
+
+vTaskDelay(
+pdMS_TO_TICKS(
+1000));
+
+}
+
+}
+
+
+/******** SETUP ********/
+
+void setup(){
+
+Serial.begin(
+115200);
+
+dht.begin();
+
+pinMode(
+BUZZER,
+OUTPUT);
+
+pinMode(
+MQ2_PIN,
+INPUT);
+
+pinMode(
+RAD_PIN,
+INPUT);
+
+/* ADC setup */
+
+analogReadResolution(
+12);
+
+analogSetAttenuation(
+ADC_11db);
+
+eventQueue=
+xQueueCreate(
+10,
+sizeof(
+EventData));
+
+xTaskCreate(
+radiationTask,
+"Radiation",
+4096,
+NULL,
+4,
+NULL);
+
+xTaskCreate(
+mqTask,
+"MQ2",
+4096,
+NULL,
+3,
+NULL);
+
+xTaskCreate(
+tempTask,
+"Temp",
+4096,
+NULL,
+2,
+NULL);
+
+xTaskCreate(
+alertTask,
+"Alert",
+4096,
+NULL,
+1,
+NULL);
+
+xTaskCreate(
+dashboardTask,
+"Dashboard",
+4096,
+NULL,
+1,
+NULL);
+
+}
+
+void loop(){}
